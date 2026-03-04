@@ -27,6 +27,7 @@ type GatewayPayload = {
   op?: number;
   t?: string;
   s?: number | null;
+  id?: string;
   d?: unknown;
 };
 
@@ -282,6 +283,7 @@ export async function monitorQQBotProvider(opts: MonitorQQBotOpts = {}): Promise
             await handleQQBotDispatch({
               eventType,
               eventData: payload.d,
+              eventId: payload.id,
               cfg: opts.config,
               accountId,
               logger,

@@ -32,6 +32,7 @@ export interface QQInboundMessage {
   content: string;
   attachments?: QQInboundAttachment[];
   messageId: string;
+  eventId?: string;
   timestamp: number;
   groupOpenid?: string;
   channelId?: string;

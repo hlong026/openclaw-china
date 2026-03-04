@@ -35,6 +35,7 @@ import * as fs from "node:fs";
 type DispatchParams = {
   eventType: string;
   eventData: unknown;
+  eventId?: string;
   cfg?: PluginConfig;
   accountId: string;
   logger?: Logger;
@@ -98,6 +99,10 @@ function parseTextWithAttachments(payload: Record<string, unknown>): {
     text: rawContent.trim(),
     attachments,
   };
+}
+
+function resolveEventId(payload: Record<string, unknown>, fallbackEventId?: string): string | undefined {
+  return toString(payload.event_id) ?? toString(payload.eventId) ?? toString(fallbackEventId);
 }
 
 type ResolvedInboundAttachment = {
@@ -336,10 +341,11 @@ function sanitizeInboundLogText(text: string): string {
   return text.replace(/\r?\n/g, "\\n");
 }
 
-function parseC2CMessage(data: unknown): QQInboundMessage | null {
+function parseC2CMessage(data: unknown, fallbackEventId?: string): QQInboundMessage | null {
   const payload = data as Record<string, unknown>;
   const { text, attachments } = parseTextWithAttachments(payload);
   const id = toString(payload.id);
+  const eventId = resolveEventId(payload, fallbackEventId);
   const timestamp = toNumber(payload.timestamp) ?? Date.now();
   const author = (payload.author ?? {}) as Record<string, unknown>;
   const senderId = toString(author.user_openid);
@@ -353,15 +359,17 @@ function parseC2CMessage(data: unknown): QQInboundMessage | null {
     content: text,
     attachments: attachments.length > 0 ? attachments : undefined,
     messageId: id,
+    eventId,
     timestamp,
     mentionedBot: false,
   };
 }
 
-function parseGroupMessage(data: unknown): QQInboundMessage | null {
+function parseGroupMessage(data: unknown, fallbackEventId?: string): QQInboundMessage | null {
   const payload = data as Record<string, unknown>;
   const { text, attachments } = parseTextWithAttachments(payload);
   const id = toString(payload.id);
+  const eventId = resolveEventId(payload, fallbackEventId);
   const timestamp = toNumber(payload.timestamp) ?? Date.now();
   const groupOpenid = toString(payload.group_openid);
   const author = (payload.author ?? {}) as Record<string, unknown>;
@@ -375,16 +383,18 @@ function parseGroupMessage(data: unknown): QQInboundMessage | null {
     content: text,
     attachments: attachments.length > 0 ? attachments : undefined,
     messageId: id,
+    eventId,
     timestamp,
     groupOpenid,
     mentionedBot: true,
   };
 }
 
-function parseChannelMessage(data: unknown): QQInboundMessage | null {
+function parseChannelMessage(data: unknown, fallbackEventId?: string): QQInboundMessage | null {
   const payload = data as Record<string, unknown>;
   const { text, attachments } = parseTextWithAttachments(payload);
   const id = toString(payload.id);
+  const eventId = resolveEventId(payload, fallbackEventId);
   const timestamp = toNumber(payload.timestamp) ?? Date.now();
   const channelId = toString(payload.channel_id);
   const guildId = toString(payload.guild_id);
@@ -399,6 +409,7 @@ function parseChannelMessage(data: unknown): QQInboundMessage | null {
     content: text,
     attachments: attachments.length > 0 ? attachments : undefined,
     messageId: id,
+    eventId,
     timestamp,
     channelId,
     guildId,
@@ -406,10 +417,11 @@ function parseChannelMessage(data: unknown): QQInboundMessage | null {
   };
 }
 
-function parseDirectMessage(data: unknown): QQInboundMessage | null {
+function parseDirectMessage(data: unknown, fallbackEventId?: string): QQInboundMessage | null {
   const payload = data as Record<string, unknown>;
   const { text, attachments } = parseTextWithAttachments(payload);
   const id = toString(payload.id);
+  const eventId = resolveEventId(payload, fallbackEventId);
   const timestamp = toNumber(payload.timestamp) ?? Date.now();
   const guildId = toString(payload.guild_id);
   const author = (payload.author ?? {}) as Record<string, unknown>;
@@ -423,22 +435,23 @@ function parseDirectMessage(data: unknown): QQInboundMessage | null {
     content: text,
     attachments: attachments.length > 0 ? attachments : undefined,
     messageId: id,
+    eventId,
     timestamp,
     guildId,
     mentionedBot: false,
   };
 }
 
-function resolveInbound(eventType: string, data: unknown): QQInboundMessage | null {
+function resolveInbound(eventType: string, data: unknown, fallbackEventId?: string): QQInboundMessage | null {
   switch (eventType) {
     case "C2C_MESSAGE_CREATE":
-      return parseC2CMessage(data);
+      return parseC2CMessage(data, fallbackEventId);
     case "GROUP_AT_MESSAGE_CREATE":
-      return parseGroupMessage(data);
+      return parseGroupMessage(data, fallbackEventId);
     case "AT_MESSAGE_CREATE":
-      return parseChannelMessage(data);
+      return parseChannelMessage(data, fallbackEventId);
     case "DIRECT_MESSAGE_CREATE":
-      return parseDirectMessage(data);
+      return parseDirectMessage(data, fallbackEventId);
     default:
       return null;
   }
@@ -626,10 +639,11 @@ export async function sendQQBotMediaWithFallback(params: {
   to: string;
   mediaQueue: string[];
   replyToId?: string;
+  replyEventId?: string;
   logger: Logger;
   outbound?: Pick<typeof qqbotOutbound, "sendMedia" | "sendText">;
 }): Promise<void> {
-  const { qqCfg, to, mediaQueue, replyToId, logger } = params;
+  const { qqCfg, to, mediaQueue, replyToId, replyEventId, logger } = params;
   const outbound = params.outbound ?? qqbotOutbound;
   for (const mediaUrl of mediaQueue) {
     const result = await outbound.sendMedia({
@@ -637,6 +651,7 @@ export async function sendQQBotMediaWithFallback(params: {
       to,
       mediaUrl,
       replyToId,
+      replyEventId,
     });
     if (result.error) {
       logger.error(`sendMedia failed: ${result.error}`);
@@ -646,6 +661,7 @@ export async function sendQQBotMediaWithFallback(params: {
         to,
         text: fallback,
         replyToId,
+        replyEventId,
       });
       if (fallbackResult.error) {
         logger.error(`sendText fallback failed: ${fallbackResult.error}`);
@@ -718,6 +734,7 @@ async function dispatchToAgent(params: {
       cfg: { channels: { qqbot: qqCfg } },
       to: `user:${inbound.c2cOpenid}`,
       replyToId: inbound.messageId,
+      replyEventId: inbound.eventId,
       inputSecond: 60,
     });
     if (typing.error) {
@@ -763,6 +780,7 @@ async function dispatchToAgent(params: {
       to: target.to,
       text: buildVoiceASRFallbackReply(resolvedAttachmentResult.asrErrorMessage),
       replyToId: inbound.messageId,
+      replyEventId: inbound.eventId,
     });
     if (fallback.error) {
       logger.error(`sendText ASR fallback failed: ${fallback.error}`);
@@ -954,6 +972,7 @@ async function dispatchToAgent(params: {
           to: target.to,
           text: chunk,
           replyToId: inbound.messageId,
+          replyEventId: inbound.eventId,
         });
         if (result.error) {
           logger.error(`sendText failed: ${result.error}`);
@@ -966,6 +985,7 @@ async function dispatchToAgent(params: {
       to: target.to,
       mediaQueue,
       replyToId: inbound.messageId,
+      replyEventId: inbound.eventId,
       logger,
     });
   };
@@ -1063,7 +1083,7 @@ function shouldHandleMessage(event: QQInboundMessage, qqCfg: QQBotAccountConfig,
 
 export async function handleQQBotDispatch(params: DispatchParams): Promise<void> {
   const logger = params.logger ?? createLogger("qqbot");
-  const inbound = resolveInbound(params.eventType, params.eventData);
+  const inbound = resolveInbound(params.eventType, params.eventData, params.eventId);
   if (!inbound) {
     return;
   }

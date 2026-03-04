@@ -29,11 +29,11 @@ function requireTrimmedString(value: unknown, field: string): string {
   return normalized;
 }
 
-function nextMsgSeq(messageId?: string): number {
-  if (!messageId) return MSG_SEQ_BASE + 1;
-  const current = msgSeqMap.get(messageId) ?? 0;
+function nextMsgSeq(sequenceKey?: string): number {
+  if (!sequenceKey) return MSG_SEQ_BASE + 1;
+  const current = msgSeqMap.get(sequenceKey) ?? 0;
   const next = current + 1;
-  msgSeqMap.set(messageId, next);
+  msgSeqMap.set(sequenceKey, next);
   if (msgSeqMap.size > 1000) {
     const keys = Array.from(msgSeqMap.keys());
     for (let i = 0; i < 500; i += 1) {
@@ -138,9 +138,10 @@ export async function getGatewayUrl(accessToken: string): Promise<string> {
 function buildMessageBody(params: {
   content: string;
   messageId?: string;
+  eventId?: string;
   markdown?: boolean;
 }): Record<string, unknown> {
-  const msgSeq = nextMsgSeq(params.messageId);
+  const msgSeq = nextMsgSeq(params.messageId ?? params.eventId);
   const body: Record<string, unknown> = params.markdown
     ? {
         markdown: { content: params.content },
@@ -155,6 +156,8 @@ function buildMessageBody(params: {
 
   if (params.messageId) {
     body.msg_id = params.messageId;
+  } else if (params.eventId) {
+    body.event_id = params.eventId;
   }
   return body;
 }
@@ -164,11 +167,13 @@ export async function sendC2CMessage(params: {
   openid: string;
   content: string;
   messageId?: string;
+  eventId?: string;
   markdown?: boolean;
 }): Promise<{ id: string; timestamp: number | string }> {
   const body = buildMessageBody({
     content: params.content,
     messageId: params.messageId,
+    eventId: params.eventId,
     markdown: params.markdown,
   });
   return apiPost(params.accessToken, `/v2/users/${params.openid}/messages`, body, {
@@ -181,11 +186,13 @@ export async function sendGroupMessage(params: {
   groupOpenid: string;
   content: string;
   messageId?: string;
+  eventId?: string;
   markdown?: boolean;
 }): Promise<{ id: string; timestamp: number | string }> {
   const body = buildMessageBody({
     content: params.content,
     messageId: params.messageId,
+    eventId: params.eventId,
     markdown: params.markdown,
   });
   const groupOpenidLower = params.groupOpenid.toLowerCase();
@@ -214,9 +221,10 @@ export async function sendC2CInputNotify(params: {
   accessToken: string;
   openid: string;
   messageId?: string;
+  eventId?: string;
   inputSecond?: number;
 }): Promise<void> {
-  const msgSeq = nextMsgSeq(params.messageId);
+  const msgSeq = nextMsgSeq(params.messageId ?? params.eventId);
   await apiPost(
     params.accessToken,
     `/v2/users/${params.openid}/messages`,
@@ -227,7 +235,11 @@ export async function sendC2CInputNotify(params: {
         input_second: params.inputSecond ?? 60,
       },
       msg_seq: msgSeq,
-      ...(params.messageId ? { msg_id: params.messageId } : {}),
+      ...(params.messageId
+        ? { msg_id: params.messageId }
+        : params.eventId
+          ? { event_id: params.eventId }
+          : {}),
     },
     { timeout: 15000 }
   );
@@ -298,9 +310,10 @@ export async function sendC2CMediaMessage(params: {
   openid: string;
   fileInfo: string;
   messageId?: string;
+  eventId?: string;
   content?: string;
 }): Promise<{ id: string; timestamp: number | string }> {
-  const msgSeq = nextMsgSeq(params.messageId);
+  const msgSeq = nextMsgSeq(params.messageId ?? params.eventId);
   return apiPost(
     params.accessToken,
     `/v2/users/${params.openid}/messages`,
@@ -309,7 +322,11 @@ export async function sendC2CMediaMessage(params: {
       media: { file_info: params.fileInfo },
       msg_seq: msgSeq,
       ...(params.content ? { content: params.content } : {}),
-      ...(params.messageId ? { msg_id: params.messageId } : {}),
+      ...(params.messageId
+        ? { msg_id: params.messageId }
+        : params.eventId
+          ? { event_id: params.eventId }
+          : {}),
     },
     { timeout: 15000 }
   );
@@ -320,9 +337,10 @@ export async function sendGroupMediaMessage(params: {
   groupOpenid: string;
   fileInfo: string;
   messageId?: string;
+  eventId?: string;
   content?: string;
 }): Promise<{ id: string; timestamp: number | string }> {
-  const msgSeq = nextMsgSeq(params.messageId);
+  const msgSeq = nextMsgSeq(params.messageId ?? params.eventId);
   return apiPost(
     params.accessToken,
     `/v2/groups/${params.groupOpenid}/messages`,
@@ -331,7 +349,11 @@ export async function sendGroupMediaMessage(params: {
       media: { file_info: params.fileInfo },
       msg_seq: msgSeq,
       ...(params.content ? { content: params.content } : {}),
-      ...(params.messageId ? { msg_id: params.messageId } : {}),
+      ...(params.messageId
+        ? { msg_id: params.messageId }
+        : params.eventId
+          ? { event_id: params.eventId }
+          : {}),
     },
     { timeout: 15000 }
   );

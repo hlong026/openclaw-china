@@ -2,6 +2,7 @@
  * QQ Bot 出站适配器
  */
 
+import { HttpError } from "@openclaw-china/shared";
 import { mergeQQBotAccountConfig, DEFAULT_ACCOUNT_ID, type PluginConfig } from "./config.js";
 import {
   getAccessToken,
@@ -40,6 +41,81 @@ function parseTarget(to: string): { kind: TargetKind; id: string } {
   return { kind: "c2c", id: raw };
 }
 
+function shortId(value?: string): string {
+  const text = String(value ?? "").trim();
+  if (!text) return "-";
+  if (text.length <= 12) return text;
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
+function summarizeError(err: unknown): string {
+  if (err instanceof HttpError) {
+    const body = err.body?.trim();
+    return body ? `status=${err.status}, body=${body}` : `status=${err.status}, message=${err.message}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+function logEventIdFallback(params: {
+  phase: "start" | "success" | "failed";
+  action: "text" | "media" | "typing";
+  accountId?: string;
+  targetKind: TargetKind;
+  targetId: string;
+  messageId?: string;
+  eventId?: string;
+  reason?: string;
+}): void {
+  const accountLabel = params.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const detail =
+    `[qqbot] event_id-fallback phase=${params.phase} action=${params.action} accountId=${accountLabel} ` +
+    `target=${params.targetKind}:${shortId(params.targetId)} msg_id=${shortId(params.messageId)} event_id=${shortId(params.eventId)}` +
+    (params.reason ? ` reason=${params.reason}` : "");
+
+  if (params.phase === "failed") {
+    console.error(detail);
+    return;
+  }
+  if (params.phase === "start") {
+    console.warn(detail);
+    return;
+  }
+  console.info(detail);
+}
+
+function shouldRetryWithEventId(err: unknown): boolean {
+  const status = err instanceof HttpError ? err.status : undefined;
+  let body = "";
+  if (err instanceof HttpError) {
+    body = err.body ?? "";
+  } else if (err instanceof Error) {
+    body = err.message;
+  } else {
+    body = String(err);
+  }
+
+  const text = body.toLowerCase();
+  const mentionsPassiveReply =
+    text.includes("msg_id") ||
+    text.includes("被动") ||
+    text.includes("passive") ||
+    text.includes("reply");
+  if (!mentionsPassiveReply && !(typeof status === "number" && status >= 400 && status < 500)) {
+    return false;
+  }
+
+  return (
+    text.includes("expire") ||
+    text.includes("invalid") ||
+    text.includes("not found") ||
+    text.includes("超过") ||
+    text.includes("超时") ||
+    text.includes("过期") ||
+    text.includes("失效") ||
+    text.includes("无效")
+  );
+}
+
 export const qqbotOutbound = {
   deliveryMode: "direct" as const,
   textChunkLimit: 1500,
@@ -50,9 +126,10 @@ export const qqbotOutbound = {
     to: string;
     text: string;
     replyToId?: string;
+    replyEventId?: string;
     accountId?: string;
   }): Promise<QQBotSendResult> => {
-    const { cfg, to, text, replyToId, accountId } = params;
+    const { cfg, to, text, replyToId, replyEventId, accountId } = params;
     const qqCfg = mergeQQBotAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
     if (!qqCfg.appId || !qqCfg.clientSecret) {
       return { channel: "qqbot", error: "QQBot not configured (missing appId/clientSecret)" };
@@ -64,13 +141,60 @@ export const qqbotOutbound = {
 
     try {
       if (target.kind === "group") {
-        const result = await sendGroupMessage({
-          accessToken,
-          groupOpenid: target.id,
-          content: text,
-          messageId: replyToId,
-          markdown,
-        });
+        let result: { id: string; timestamp: number | string };
+        try {
+          result = await sendGroupMessage({
+            accessToken,
+            groupOpenid: target.id,
+            content: text,
+            messageId: replyToId,
+            markdown,
+          });
+        } catch (err) {
+          if (!replyToId || !replyEventId || !shouldRetryWithEventId(err)) {
+            throw err;
+          }
+          logEventIdFallback({
+            phase: "start",
+            action: "text",
+            accountId,
+            targetKind: target.kind,
+            targetId: target.id,
+            messageId: replyToId,
+            eventId: replyEventId,
+            reason: summarizeError(err),
+          });
+          try {
+          result = await sendGroupMessage({
+            accessToken,
+            groupOpenid: target.id,
+            content: text,
+            eventId: replyEventId,
+            markdown,
+          });
+            logEventIdFallback({
+              phase: "success",
+              action: "text",
+              accountId,
+              targetKind: target.kind,
+              targetId: target.id,
+              messageId: replyToId,
+              eventId: replyEventId,
+            });
+          } catch (retryErr) {
+            logEventIdFallback({
+              phase: "failed",
+              action: "text",
+              accountId,
+              targetKind: target.kind,
+              targetId: target.id,
+              messageId: replyToId,
+              eventId: replyEventId,
+              reason: summarizeError(retryErr),
+            });
+            throw retryErr;
+          }
+        }
         return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
       }
       if (target.kind === "channel") {
@@ -83,13 +207,60 @@ export const qqbotOutbound = {
         return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
       }
 
-      const result = await sendC2CMessage({
-        accessToken,
-        openid: target.id,
-        content: text,
-        messageId: replyToId,
-        markdown,
-      });
+      let result: { id: string; timestamp: number | string };
+      try {
+        result = await sendC2CMessage({
+          accessToken,
+          openid: target.id,
+          content: text,
+          messageId: replyToId,
+          markdown,
+        });
+      } catch (err) {
+        if (!replyToId || !replyEventId || !shouldRetryWithEventId(err)) {
+          throw err;
+        }
+        logEventIdFallback({
+          phase: "start",
+          action: "text",
+          accountId,
+          targetKind: target.kind,
+          targetId: target.id,
+          messageId: replyToId,
+          eventId: replyEventId,
+          reason: summarizeError(err),
+        });
+        try {
+        result = await sendC2CMessage({
+          accessToken,
+          openid: target.id,
+          content: text,
+          eventId: replyEventId,
+          markdown,
+        });
+          logEventIdFallback({
+            phase: "success",
+            action: "text",
+            accountId,
+            targetKind: target.kind,
+            targetId: target.id,
+            messageId: replyToId,
+            eventId: replyEventId,
+          });
+        } catch (retryErr) {
+          logEventIdFallback({
+            phase: "failed",
+            action: "text",
+            accountId,
+            targetKind: target.kind,
+            targetId: target.id,
+            messageId: replyToId,
+            eventId: replyEventId,
+            reason: summarizeError(retryErr),
+          });
+          throw retryErr;
+        }
+      }
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -103,15 +274,16 @@ export const qqbotOutbound = {
     text?: string;
     mediaUrl?: string;
     replyToId?: string;
+    replyEventId?: string;
     accountId?: string;
   }): Promise<QQBotSendResult> => {
-    const { cfg, to, mediaUrl, text, replyToId, accountId } = params;
+    const { cfg, to, mediaUrl, text, replyToId, replyEventId, accountId } = params;
     if (!mediaUrl) {
       const fallbackText = text?.trim() ?? "";
       if (!fallbackText) {
         return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
       }
-      return qqbotOutbound.sendText({ cfg, to, text: fallbackText, replyToId, accountId });
+      return qqbotOutbound.sendText({ cfg, to, text: fallbackText, replyToId, replyEventId, accountId });
     }
 
     const qqCfg = mergeQQBotAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
@@ -122,16 +294,62 @@ export const qqbotOutbound = {
     const target = parseTarget(to);
     if (target.kind === "channel") {
       const fallbackText = text?.trim() ? `${text}\n${mediaUrl}` : mediaUrl;
-      return qqbotOutbound.sendText({ cfg, to, text: fallbackText, replyToId });
+      return qqbotOutbound.sendText({ cfg, to, text: fallbackText, replyToId, replyEventId, accountId });
     }
 
     try {
-      const result = await sendFileQQBot({
-        cfg: qqCfg,
-        target: { kind: target.kind, id: target.id },
-        mediaUrl,
-        messageId: replyToId,
-      });
+      let result: { id: string; timestamp: number | string };
+      try {
+        result = await sendFileQQBot({
+          cfg: qqCfg,
+          target: { kind: target.kind, id: target.id },
+          mediaUrl,
+          messageId: replyToId,
+        });
+      } catch (err) {
+        if (!replyToId || !replyEventId || !shouldRetryWithEventId(err)) {
+          throw err;
+        }
+        logEventIdFallback({
+          phase: "start",
+          action: "media",
+          accountId,
+          targetKind: target.kind,
+          targetId: target.id,
+          messageId: replyToId,
+          eventId: replyEventId,
+          reason: summarizeError(err),
+        });
+        try {
+        result = await sendFileQQBot({
+          cfg: qqCfg,
+          target: { kind: target.kind, id: target.id },
+          mediaUrl,
+          eventId: replyEventId,
+        });
+          logEventIdFallback({
+            phase: "success",
+            action: "media",
+            accountId,
+            targetKind: target.kind,
+            targetId: target.id,
+            messageId: replyToId,
+            eventId: replyEventId,
+          });
+        } catch (retryErr) {
+          logEventIdFallback({
+            phase: "failed",
+            action: "media",
+            accountId,
+            targetKind: target.kind,
+            targetId: target.id,
+            messageId: replyToId,
+            eventId: replyEventId,
+            reason: summarizeError(retryErr),
+          });
+          throw retryErr;
+        }
+      }
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -143,10 +361,11 @@ export const qqbotOutbound = {
     cfg: PluginConfig;
     to: string;
     replyToId?: string;
+    replyEventId?: string;
     inputSecond?: number;
     accountId?: string;
   }): Promise<QQBotSendResult> => {
-    const { cfg, to, replyToId, inputSecond, accountId } = params;
+    const { cfg, to, replyToId, replyEventId, inputSecond, accountId } = params;
     const qqCfg = mergeQQBotAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
     if (!qqCfg.appId || !qqCfg.clientSecret) {
       return { channel: "qqbot", error: "QQBot not configured (missing appId/clientSecret)" };
@@ -159,12 +378,58 @@ export const qqbotOutbound = {
 
     try {
       const accessToken = await getAccessToken(qqCfg.appId, qqCfg.clientSecret);
-      await sendC2CInputNotify({
-        accessToken,
-        openid: target.id,
-        messageId: replyToId,
-        inputSecond,
-      });
+      try {
+        await sendC2CInputNotify({
+          accessToken,
+          openid: target.id,
+          messageId: replyToId,
+          eventId: !replyToId ? replyEventId : undefined,
+          inputSecond,
+        });
+      } catch (err) {
+        if (!replyToId || !replyEventId || !shouldRetryWithEventId(err)) {
+          throw err;
+        }
+        logEventIdFallback({
+          phase: "start",
+          action: "typing",
+          accountId,
+          targetKind: target.kind,
+          targetId: target.id,
+          messageId: replyToId,
+          eventId: replyEventId,
+          reason: summarizeError(err),
+        });
+        try {
+        await sendC2CInputNotify({
+          accessToken,
+          openid: target.id,
+          eventId: replyEventId,
+          inputSecond,
+        });
+          logEventIdFallback({
+            phase: "success",
+            action: "typing",
+            accountId,
+            targetKind: target.kind,
+            targetId: target.id,
+            messageId: replyToId,
+            eventId: replyEventId,
+          });
+        } catch (retryErr) {
+          logEventIdFallback({
+            phase: "failed",
+            action: "typing",
+            accountId,
+            targetKind: target.kind,
+            targetId: target.id,
+            messageId: replyToId,
+            eventId: replyEventId,
+            reason: summarizeError(retryErr),
+          });
+          throw retryErr;
+        }
+      }
       return { channel: "qqbot" };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

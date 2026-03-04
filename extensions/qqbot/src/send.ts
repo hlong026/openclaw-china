@@ -36,6 +36,7 @@ export interface SendFileQQBotParams {
   target: QQBotFileTarget;
   mediaUrl: string;
   messageId?: string;
+  eventId?: string;
 }
 
 const QQBOT_UNSUPPORTED_FILE_TYPE_MESSAGE =
@@ -119,7 +120,7 @@ async function convertAudioToSilk(audioPath: string): Promise<Uint8Array> {
 }
 
 export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: string; timestamp: number | string }> {
-  const { cfg, target, mediaUrl, messageId } = params;
+  const { cfg, target, mediaUrl, messageId, eventId } = params;
   if (!cfg.appId || !cfg.clientSecret) {
     throw new Error("QQBot not configured (missing appId/clientSecret)");
   }
@@ -183,10 +184,11 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
         accessToken,
         groupOpenid: target.id,
         fileInfo,
-        messageId,
+        ...(messageId ? { messageId } : {}),
+        ...(eventId ? { eventId } : {}),
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatQQBotError(err);
       throw new Error(`QQBot group media send failed: ${message}`);
     }
   }
@@ -196,10 +198,11 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
       accessToken,
       openid: target.id,
       fileInfo,
-      messageId,
+      ...(messageId ? { messageId } : {}),
+      ...(eventId ? { eventId } : {}),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatQQBotError(err);
     throw new Error(`QQBot C2C media send failed: ${message}`);
   }
 }
