@@ -9,8 +9,7 @@
   <a href="#功能支持">功能支持</a> •
   <a href="#更新日志">更新日志</a> •
   <a href="#演示">演示</a> •
-  <a href="#💗 支持我们
-">💗 支持我们</a> •
+  <a href="#-支持我们">💗 支持我们</a> •
   <a href="#加入交流群"><strong>加入交流群</strong></a>
 </p>
 <p align="center">
