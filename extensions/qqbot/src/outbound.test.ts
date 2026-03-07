@@ -98,6 +98,7 @@ describe("qqbotOutbound event_id fallback", () => {
     const result = await qqbotOutbound.sendMedia({
       cfg: baseCfg,
       to: "group:g-2",
+      text: "caption",
       mediaUrl: "https://example.com/a.png",
       replyToId: "msg-2",
       replyEventId: "evt-2",
@@ -105,7 +106,36 @@ describe("qqbotOutbound event_id fallback", () => {
 
     expect(result).toEqual({ channel: "qqbot", messageId: "media-1", timestamp: 2 });
     expect(mocks.sendFileQQBot).toHaveBeenCalledTimes(2);
-    expect(mocks.sendFileQQBot.mock.calls[0]?.[0]).toMatchObject({ messageId: "msg-2" });
-    expect(mocks.sendFileQQBot.mock.calls[1]?.[0]).toMatchObject({ eventId: "evt-2" });
+    expect(mocks.sendFileQQBot.mock.calls[0]?.[0]).toMatchObject({ messageId: "msg-2", text: "caption" });
+    expect(mocks.sendFileQQBot.mock.calls[1]?.[0]).toMatchObject({ eventId: "evt-2", text: "caption" });
+  });
+
+  it("sends follow-up text after generic file delivery", async () => {
+    mocks.sendFileQQBot.mockResolvedValueOnce({ id: "media-2", timestamp: 3 });
+    mocks.sendC2CMessage.mockResolvedValueOnce({ id: "text-1", timestamp: 4 });
+
+    const result = await qqbotOutbound.sendMedia({
+      cfg: baseCfg,
+      to: "user:u-1",
+      text: "给你转好了~",
+      mediaUrl: "C:/tmp/report.pdf",
+      replyToId: "msg-3",
+    });
+
+    expect(result).toEqual({ channel: "qqbot", messageId: "media-2", timestamp: 3 });
+    expect(mocks.sendFileQQBot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "C:/tmp/report.pdf",
+        text: undefined,
+        messageId: "msg-3",
+      })
+    );
+    expect(mocks.sendC2CMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openid: "u-1",
+        content: "给你转好了~",
+        messageId: "msg-3",
+      })
+    );
   });
 });

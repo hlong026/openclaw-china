@@ -265,6 +265,7 @@ export async function uploadC2CMedia(params: {
   fileType: MediaFileType;
   url?: string;
   fileData?: string;
+  fileName?: string;
 }): Promise<UploadMediaResponse> {
   const body: Record<string, unknown> = {
     file_type: params.fileType,
@@ -275,6 +276,9 @@ export async function uploadC2CMedia(params: {
     body.file_data = params.fileData;
   } else {
     throw new Error("uploadC2CMedia requires url or fileData");
+  }
+  if (params.fileType === MediaFileType.FILE && params.fileName?.trim()) {
+    body.file_name = params.fileName.trim();
   }
 
   return apiPost(params.accessToken, `/v2/users/${params.openid}/files`, body, {
@@ -288,6 +292,7 @@ export async function uploadGroupMedia(params: {
   fileType: MediaFileType;
   url?: string;
   fileData?: string;
+  fileName?: string;
 }): Promise<UploadMediaResponse> {
   const body: Record<string, unknown> = {
     file_type: params.fileType,
@@ -298,6 +303,9 @@ export async function uploadGroupMedia(params: {
     body.file_data = params.fileData;
   } else {
     throw new Error("uploadGroupMedia requires url or fileData");
+  }
+  if (params.fileType === MediaFileType.FILE && params.fileName?.trim()) {
+    body.file_name = params.fileName.trim();
   }
 
   return apiPost(params.accessToken, `/v2/groups/${params.groupOpenid}/files`, body, {

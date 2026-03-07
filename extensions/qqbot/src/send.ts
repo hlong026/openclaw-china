@@ -35,12 +35,10 @@ export interface SendFileQQBotParams {
   cfg: QQBotAccountConfig;
   target: QQBotFileTarget;
   mediaUrl: string;
+  text?: string;
   messageId?: string;
   eventId?: string;
 }
-
-const QQBOT_UNSUPPORTED_FILE_TYPE_MESSAGE =
-  "QQ official C2C/group media API does not support generic files (file_type=4, e.g. PDF). Images and other supported media types are unaffected.";
 
 const require = createRequire(import.meta.url);
 
@@ -64,8 +62,9 @@ async function uploadQQBotFile(params: {
   fileType: MediaFileType;
   url?: string;
   fileData?: string;
+  fileName?: string;
 }): Promise<string> {
-  const { accessToken, target, fileType, url, fileData } = params;
+  const { accessToken, target, fileType, url, fileData, fileName } = params;
   if (!url && !fileData) {
     throw new Error("QQBot file upload requires url or fileData");
   }
@@ -75,12 +74,14 @@ async function uploadQQBotFile(params: {
           accessToken,
           groupOpenid: target.id,
           fileType,
+          ...(fileName ? { fileName } : {}),
           ...(url ? { url } : { fileData }),
         })
       : await uploadC2CMedia({
           accessToken,
           openid: target.id,
           fileType,
+          ...(fileName ? { fileName } : {}),
           ...(url ? { url } : { fileData }),
         });
 
@@ -88,6 +89,24 @@ async function uploadQQBotFile(params: {
     throw new Error("QQBot file upload failed: no file_info returned");
   }
   return upload.file_info;
+}
+
+function deriveUploadFileName(source: string): string | undefined {
+  const trimmed = source.trim();
+  if (!trimmed) return undefined;
+
+  if (isHttpUrl(trimmed)) {
+    try {
+      const pathname = new URL(trimmed).pathname;
+      const base = path.posix.basename(pathname);
+      return base && base !== "/" ? base : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const base = path.basename(trimmed);
+  return base || undefined;
 }
 
 async function convertAudioToSilk(audioPath: string): Promise<Uint8Array> {
@@ -120,34 +139,35 @@ async function convertAudioToSilk(audioPath: string): Promise<Uint8Array> {
 }
 
 export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: string; timestamp: number | string }> {
-  const { cfg, target, mediaUrl, messageId, eventId } = params;
+  const { cfg, target, mediaUrl, text, messageId, eventId } = params;
   if (!cfg.appId || !cfg.clientSecret) {
     throw new Error("QQBot not configured (missing appId/clientSecret)");
   }
 
   const src = stripTitleFromUrl(mediaUrl);
   const fileType = resolveQQBotMediaFileType(src);
-  if (fileType === MediaFileType.FILE) {
-    throw new Error(QQBOT_UNSUPPORTED_FILE_TYPE_MESSAGE);
-  }
 
   const sourceIsHttp = isHttpUrl(src);
   const maxFileSizeMB = cfg.maxFileSizeMB ?? 100;
   const mediaTimeoutMs = cfg.mediaTimeoutMs ?? 30000;
   const maxSizeBytes = Math.floor(maxFileSizeMB * 1024 * 1024);
+  const messageText = text?.trim() ? text.trim() : undefined;
 
   const accessToken = await getAccessToken(cfg.appId, cfg.clientSecret);
   let fileInfo: string;
   try {
     if (sourceIsHttp) {
+      const fileName = fileType === MediaFileType.FILE ? deriveUploadFileName(src) : undefined;
       fileInfo = await uploadQQBotFile({
         accessToken,
         target,
         fileType,
         url: src,
+        ...(fileName ? { fileName } : {}),
       });
     } else {
       let buffer: Buffer;
+      let fileName = fileType === MediaFileType.FILE ? deriveUploadFileName(src) : undefined;
       if (fileType === MediaFileType.VOICE) {
         try {
           const silkData = await convertAudioToSilk(src);
@@ -165,12 +185,16 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
           maxSize: maxSizeBytes,
         });
         buffer = local.buffer;
+        if (fileType === MediaFileType.FILE) {
+          fileName = local.fileName || fileName;
+        }
       }
       fileInfo = await uploadQQBotFile({
         accessToken,
         target,
         fileType,
         fileData: buffer.toString("base64"),
+        ...(fileName ? { fileName } : {}),
       });
     }
   } catch (err) {
@@ -184,6 +208,7 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
         accessToken,
         groupOpenid: target.id,
         fileInfo,
+        ...(messageText ? { content: messageText } : {}),
         ...(messageId ? { messageId } : {}),
         ...(eventId ? { eventId } : {}),
       });
@@ -198,6 +223,7 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
       accessToken,
       openid: target.id,
       fileInfo,
+      ...(messageText ? { content: messageText } : {}),
       ...(messageId ? { messageId } : {}),
       ...(eventId ? { eventId } : {}),
     });

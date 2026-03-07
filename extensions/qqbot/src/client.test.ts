@@ -16,7 +16,7 @@ vi.mock("@openclaw-china/shared", async () => {
   };
 });
 
-import { clearTokenCache, getAccessToken } from "./client.js";
+import { MediaFileType, clearTokenCache, getAccessToken, uploadC2CMedia } from "./client.js";
 
 describe("getAccessToken", () => {
   beforeEach(() => {
@@ -43,5 +43,36 @@ describe("getAccessToken", () => {
   it("rejects empty appId values after trimming", async () => {
     await expect(getAccessToken("  ", "secret")).rejects.toThrow("appId");
     expect(mocks.httpPost).not.toHaveBeenCalled();
+  });
+
+  it("includes file_name for FILE uploads", async () => {
+    mocks.httpPost.mockResolvedValue({
+      file_uuid: "file-1",
+      file_info: "info-1",
+      ttl: 3600,
+    });
+
+    await uploadC2CMedia({
+      accessToken: "token-1",
+      openid: "user-1",
+      fileType: MediaFileType.FILE,
+      fileData: "base64-data",
+      fileName: "report.pdf",
+    });
+
+    expect(mocks.httpPost).toHaveBeenCalledWith(
+      "https://api.sgroup.qq.com/v2/users/user-1/files",
+      {
+        file_type: 4,
+        file_data: "base64-data",
+        file_name: "report.pdf",
+      },
+      {
+        timeout: 30000,
+        headers: {
+          Authorization: "QQBot token-1",
+        },
+      }
+    );
   });
 });

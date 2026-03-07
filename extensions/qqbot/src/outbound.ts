@@ -2,7 +2,7 @@
  * QQ Bot 出站适配器
  */
 
-import { HttpError } from "@openclaw-china/shared";
+import { detectMediaType, HttpError, stripTitleFromUrl } from "@openclaw-china/shared";
 import { mergeQQBotAccountConfig, DEFAULT_ACCOUNT_ID, type PluginConfig } from "./config.js";
 import {
   getAccessToken,
@@ -114,6 +114,10 @@ function shouldRetryWithEventId(err: unknown): boolean {
     text.includes("失效") ||
     text.includes("无效")
   );
+}
+
+function shouldSendTextAsFollowupForMedia(mediaUrl: string): boolean {
+  return detectMediaType(stripTitleFromUrl(mediaUrl)) === "file";
 }
 
 export const qqbotOutbound = {
@@ -292,8 +296,10 @@ export const qqbotOutbound = {
     }
 
     const target = parseTarget(to);
+    const trimmedText = text?.trim() ? text.trim() : undefined;
+    const sendTextAsFollowup = trimmedText ? shouldSendTextAsFollowupForMedia(mediaUrl) : false;
     if (target.kind === "channel") {
-      const fallbackText = text?.trim() ? `${text}\n${mediaUrl}` : mediaUrl;
+      const fallbackText = trimmedText ? `${trimmedText}\n${mediaUrl}` : mediaUrl;
       return qqbotOutbound.sendText({ cfg, to, text: fallbackText, replyToId, replyEventId, accountId });
     }
 
@@ -304,6 +310,7 @@ export const qqbotOutbound = {
           cfg: qqCfg,
           target: { kind: target.kind, id: target.id },
           mediaUrl,
+          text: sendTextAsFollowup ? undefined : trimmedText,
           messageId: replyToId,
         });
       } catch (err) {
@@ -325,6 +332,7 @@ export const qqbotOutbound = {
           cfg: qqCfg,
           target: { kind: target.kind, id: target.id },
           mediaUrl,
+          text: sendTextAsFollowup ? undefined : trimmedText,
           eventId: replyEventId,
         });
           logEventIdFallback({
@@ -348,6 +356,22 @@ export const qqbotOutbound = {
             reason: summarizeError(retryErr),
           });
           throw retryErr;
+        }
+      }
+      if (sendTextAsFollowup && trimmedText) {
+        const textResult = await qqbotOutbound.sendText({
+          cfg,
+          to,
+          text: trimmedText,
+          replyToId,
+          replyEventId,
+          accountId,
+        });
+        if (textResult.error) {
+          return {
+            channel: "qqbot",
+            error: `QQBot follow-up text send failed after media delivery: ${textResult.error}`,
+          };
         }
       }
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };

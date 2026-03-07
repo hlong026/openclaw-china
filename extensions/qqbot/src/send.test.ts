@@ -56,6 +56,7 @@ describe("sendFileQQBot", () => {
       cfg: { appId: "app", clientSecret: "secret" },
       target: { kind: "group", id: "group-1" },
       mediaUrl: "https://example.com/media.png",
+      text: "caption",
       messageId: "reply-1",
     });
 
@@ -66,6 +67,13 @@ describe("sendFileQQBot", () => {
       groupOpenid: "group-1",
       fileType: 1,
       url: "https://example.com/media.png",
+    });
+    expect(mocks.sendGroupMediaMessage).toHaveBeenCalledWith({
+      accessToken: "token",
+      groupOpenid: "group-1",
+      fileInfo: "file-info-1",
+      content: "caption",
+      messageId: "reply-1",
     });
   });
 
@@ -93,17 +101,28 @@ describe("sendFileQQBot", () => {
     });
   });
 
-  it("fails fast for generic files like PDF", async () => {
-    await expect(
-      sendFileQQBot({
-        cfg: { appId: "app", clientSecret: "secret" },
-        target: { kind: "group", id: "group-3" },
-        mediaUrl: "C:/tmp/report.pdf",
-      })
-    ).rejects.toThrow("file_type=4");
+  it("attempts FILE upload for generic files like PDF", async () => {
+    mocks.readMedia.mockResolvedValue({
+      buffer: Buffer.from("hello-pdf"),
+      fileName: "report.pdf",
+      size: 9,
+      mimeType: "application/pdf",
+    });
 
-    expect(mocks.readMedia).not.toHaveBeenCalled();
-    expect(mocks.uploadGroupMedia).not.toHaveBeenCalled();
+    await sendFileQQBot({
+      cfg: { appId: "app", clientSecret: "secret" },
+      target: { kind: "group", id: "group-3" },
+      mediaUrl: "C:/tmp/report.pdf",
+    });
+
+    expect(mocks.readMedia).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadGroupMedia).toHaveBeenCalledWith({
+      accessToken: "token",
+      groupOpenid: "group-3",
+      fileType: 4,
+      fileData: Buffer.from("hello-pdf").toString("base64"),
+      fileName: "report.pdf",
+    });
   });
 
   it("includes HTTP response body details in upload errors", async () => {

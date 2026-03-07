@@ -598,25 +598,7 @@ function extractMediaLinesFromText(params: {
   return { text: result.text, mediaUrls };
 }
 
-function isOfficialQQFileSendLimit(errorMessage: string | undefined): boolean {
-  const text = (errorMessage ?? "").toLowerCase();
-  if (!text) return false;
-  return (
-    text.includes("file_type=4") ||
-    text.includes("generic files") ||
-    text.includes("not support generic files") ||
-    text.includes("暂不支持通用文件")
-  );
-}
-
-function buildMediaFallbackText(mediaUrl: string, errorMessage?: string): string {
-  if (isOfficialQQFileSendLimit(errorMessage)) {
-    return [
-      "说明：根据 QQ 官方接口规范，当前 C2C/群聊暂不支持直接发送 PDF/文档等通用文件（file_type=4）。",
-      "这属于平台限制，不是插件缺陷；图片等媒体仍可正常发送。",
-      `已为你附上文件链接：${mediaUrl}`,
-    ].join("\n");
-  }
+function buildMediaFallbackText(mediaUrl: string): string {
   return `📎 ${mediaUrl}`;
 }
 
@@ -705,7 +687,7 @@ export async function sendQQBotMediaWithFallback(params: {
     });
     if (result.error) {
       logger.error(`sendMedia failed: ${result.error}`);
-      const fallback = buildMediaFallbackText(mediaUrl, result.error);
+      const fallback = buildMediaFallbackText(mediaUrl);
       const fallbackResult = await outbound.sendText({
         cfg: { channels: { qqbot: qqCfg } },
         to,
