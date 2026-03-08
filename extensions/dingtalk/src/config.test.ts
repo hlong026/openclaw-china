@@ -8,14 +8,22 @@
 import { describe, it, expect } from "vitest";
 import * as fc from "fast-check";
 import {
+  DEFAULT_ACCOUNT_ID,
   DingtalkConfigSchema,
   isConfigured,
+  listDingtalkAccountIds,
+  mergeDingtalkAccountConfig,
+  moveDingtalkSingleAccountConfigToDefaultAccount,
+  resolveDingtalkAccountId,
+  resolveDefaultDingtalkAccountId,
   resolveDingtalkCredentials,
   resolveInboundMediaDir,
   resolveInboundMediaKeepDays,
 } from "./config.js";
 
 describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () => {
+  const nonBlankStringArb = fc.string({ minLength: 1 }).filter((value) => value.trim().length > 0);
+
   /**
    * Property: For any valid DingTalk config object, Zod schema parsing should succeed
    * and return a config with all required default values.
@@ -24,8 +32,8 @@ describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () =
     // Arbitrary for valid config objects
     const validConfigArb = fc.record({
       enabled: fc.option(fc.boolean(), { nil: undefined }),
-      clientId: fc.option(fc.string({ minLength: 1 }), { nil: undefined }),
-      clientSecret: fc.option(fc.string({ minLength: 1 }), { nil: undefined }),
+      clientId: fc.option(nonBlankStringArb, { nil: undefined }),
+      clientSecret: fc.option(nonBlankStringArb, { nil: undefined }),
       dmPolicy: fc.option(fc.constantFrom("open", "pairing", "allowlist"), { nil: undefined }),
       groupPolicy: fc.option(fc.constantFrom("open", "allowlist", "disabled"), { nil: undefined }),
       requireMention: fc.option(fc.boolean(), { nil: undefined }),
@@ -92,12 +100,12 @@ describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () =
       fc.record({
         enabled: fc.option(fc.boolean(), { nil: undefined }),
         clientId: fc.constant(undefined),
-        clientSecret: fc.option(fc.string({ minLength: 1 }), { nil: undefined }),
+        clientSecret: fc.option(nonBlankStringArb, { nil: undefined }),
       }),
       // Missing clientSecret
       fc.record({
         enabled: fc.option(fc.boolean(), { nil: undefined }),
-        clientId: fc.option(fc.string({ minLength: 1 }), { nil: undefined }),
+        clientId: fc.option(nonBlankStringArb, { nil: undefined }),
         clientSecret: fc.constant(undefined),
       }),
       // Both missing
@@ -110,11 +118,11 @@ describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () =
       fc.record({
         enabled: fc.option(fc.boolean(), { nil: undefined }),
         clientId: fc.constant(""),
-        clientSecret: fc.string({ minLength: 1 }),
+        clientSecret: nonBlankStringArb,
       }),
       fc.record({
         enabled: fc.option(fc.boolean(), { nil: undefined }),
-        clientId: fc.string({ minLength: 1 }),
+        clientId: nonBlankStringArb,
         clientSecret: fc.constant(""),
       })
     );
@@ -137,8 +145,8 @@ describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () =
   it("should return true for isConfigured when credentials are present", () => {
     const configWithCredentialsArb = fc.record({
       enabled: fc.option(fc.boolean(), { nil: undefined }),
-      clientId: fc.string({ minLength: 1 }),
-      clientSecret: fc.string({ minLength: 1 }),
+      clientId: nonBlankStringArb,
+      clientSecret: nonBlankStringArb,
       dmPolicy: fc.option(fc.constantFrom("open", "pairing", "allowlist"), { nil: undefined }),
       groupPolicy: fc.option(fc.constantFrom("open", "allowlist", "disabled"), { nil: undefined }),
     });
@@ -153,8 +161,8 @@ describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () =
           
           const credentials = resolveDingtalkCredentials(parsed.data);
           expect(credentials).toBeDefined();
-          expect(credentials?.clientId).toBe(config.clientId);
-          expect(credentials?.clientSecret).toBe(config.clientSecret);
+          expect(credentials?.clientId).toBe(config.clientId.trim());
+          expect(credentials?.clientSecret).toBe(config.clientSecret.trim());
         }
       }),
       { numRuns: 100 }
@@ -244,5 +252,157 @@ describe("inboundMedia retention config", () => {
     });
     expect(resolveInboundMediaKeepDays(cfg)).toBe(3);
     expect(resolveInboundMediaDir(cfg)).toBe("/tmp/custom-inbound");
+  });
+});
+
+describe("multi-account helpers", () => {
+  it("lists configured accounts and falls back to default", () => {
+    expect(listDingtalkAccountIds({})).toEqual([DEFAULT_ACCOUNT_ID]);
+    expect(
+      listDingtalkAccountIds({
+        channels: {
+          dingtalk: {
+            accounts: {
+              bot2: { clientId: "two", clientSecret: "secret-2" },
+              bot1: { clientId: "one", clientSecret: "secret-1" },
+            },
+          },
+        },
+      })
+    ).toEqual(["bot1", "bot2"]);
+  });
+
+  it("resolves default account with explicit value or first configured account", () => {
+    expect(
+      resolveDefaultDingtalkAccountId({
+        channels: {
+          dingtalk: {
+            defaultAccount: "work",
+            accounts: {
+              work: { clientId: "work-id", clientSecret: "work-secret" },
+              personal: { clientId: "personal-id", clientSecret: "personal-secret" },
+            },
+          },
+        },
+      })
+    ).toBe("work");
+
+    expect(
+      resolveDefaultDingtalkAccountId({
+        channels: {
+          dingtalk: {
+            accounts: {
+              zebra: { clientId: "zebra-id", clientSecret: "zebra-secret" },
+              alpha: { clientId: "alpha-id", clientSecret: "alpha-secret" },
+            },
+          },
+        },
+      })
+    ).toBe("alpha");
+  });
+
+  it("ignores invalid preferred default account and falls back to a configured id", () => {
+    expect(
+      resolveDefaultDingtalkAccountId({
+        channels: {
+          dingtalk: {
+            defaultAccount: "missing",
+            accounts: {
+              zebra: { clientId: "zebra-id", clientSecret: "zebra-secret" },
+              alpha: { clientId: "alpha-id", clientSecret: "alpha-secret" },
+            },
+          },
+        },
+      })
+    ).toBe("alpha");
+  });
+
+  it("includes default account for mixed configs that still keep base credentials", () => {
+    expect(
+      listDingtalkAccountIds({
+        channels: {
+          dingtalk: {
+            clientId: "base-id",
+            clientSecret: "base-secret",
+            accounts: {
+              work: { clientId: "work-id", clientSecret: "work-secret" },
+            },
+          },
+        },
+      })
+    ).toEqual([DEFAULT_ACCOUNT_ID, "work"]);
+  });
+
+  it("resolves omitted account ids through the validated default account", () => {
+    const cfg = {
+      channels: {
+        dingtalk: {
+          defaultAccount: "work",
+          accounts: {
+            work: { clientId: "work-id", clientSecret: "work-secret" },
+            other: { clientId: "other-id", clientSecret: "other-secret" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDingtalkAccountId(cfg, undefined)).toBe("work");
+    expect(resolveDingtalkAccountId(cfg, "  ")).toBe("work");
+    expect(resolveDingtalkAccountId(cfg, "other")).toBe("other");
+  });
+
+  it("merges top-level defaults with account overrides", () => {
+    const merged = mergeDingtalkAccountConfig(
+      {
+        channels: {
+          dingtalk: {
+            enabled: true,
+            clientId: "base-id",
+            clientSecret: "base-secret",
+            dmPolicy: "allowlist",
+            allowFrom: ["u1"],
+            textChunkLimit: 4000,
+            accounts: {
+              work: {
+                clientId: "work-id",
+                clientSecret: "work-secret",
+                textChunkLimit: 2000,
+              },
+            },
+          },
+        },
+      },
+      "work"
+    );
+
+    expect(merged.clientId).toBe("work-id");
+    expect(merged.clientSecret).toBe("work-secret");
+    expect(merged.dmPolicy).toBe("allowlist");
+    expect(merged.allowFrom).toEqual(["u1"]);
+    expect(merged.textChunkLimit).toBe(2000);
+  });
+
+  it("promotes legacy single-account root config into accounts.default", () => {
+    const migrated = moveDingtalkSingleAccountConfigToDefaultAccount({
+      channels: {
+        dingtalk: {
+          enabled: true,
+          clientId: "base-id",
+          clientSecret: "base-secret",
+          enableAICard: false,
+        },
+      },
+    });
+
+    expect(migrated.channels?.dingtalk).toEqual({
+      enabled: true,
+      accounts: {
+        default: {
+          clientId: "base-id",
+          clientSecret: "base-secret",
+          enableAICard: false,
+        },
+      },
+    });
   });
 });

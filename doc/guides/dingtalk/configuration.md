@@ -119,6 +119,7 @@ openclaw config set channels.dingtalk '{
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | enabled | boolean | true | 是否启用钉钉渠道 |
+| defaultAccount | string | `"default"` / 首个账号 | 默认账户 ID |
 | clientId | string | - | 钉钉应用 AppKey |
 | clientSecret | string | - | 钉钉应用 AppSecret |
 | dmPolicy | string | "open" | 单聊策略: open/pairing/allowlist |
@@ -133,13 +134,48 @@ openclaw config set channels.dingtalk '{
 - 先下载到临时目录，再归档到 `inboundMedia.dir/YYYY-MM-DD/`
 - 每次消息处理结束后，按 `keepDays` 清理过期文件（不递归删子目录，不强删目录）
 
-### 2. OpenClaw初始化
+### 2. 多账户配置
+
+如需配置多个钉钉机器人，可以使用 `accounts` 对象（键为账户 ID）：
+
+```json
+{
+  "channels": {
+    "dingtalk": {
+      "enabled": true,
+      "defaultAccount": "bot1",
+      "groupPolicy": "open",
+      "accounts": {
+        "bot1": {
+          "name": "主机器人",
+          "clientId": "ding-main-app-key",
+          "clientSecret": "ding-main-app-secret",
+          "enableAICard": true
+        },
+        "bot2": {
+          "name": "备用机器人",
+          "clientId": "ding-backup-app-key",
+          "clientSecret": "ding-backup-app-secret",
+          "enableAICard": false
+        }
+      }
+    }
+  }
+}
+```
+
+说明：
+- 顶层配置作为默认值，账户内同名字段会覆盖顶层配置。
+- `defaultAccount` 未设置时，优先使用 `default`，否则取排序后的首个账户。
+- 多 agent 分流时，可按 `channel = "dingtalk"` + `accountId` 编写 `bindings`。
+
+### 3. OpenClaw初始化
 ```
 openclaw onboard --install-daemon
 ```
 如果已经执行了3.1，那么可以在channel时选忽略。
 
-### 3. 启动服务
+### 4. 启动服务
 
 **调试模式**（推荐先用这个，方便查看日志）：
 

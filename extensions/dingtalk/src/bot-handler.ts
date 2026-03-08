@@ -6,7 +6,10 @@
 
 import type { DingtalkRawMessage, DingtalkMessageContext } from "./types.js";
 import {
+  DEFAULT_ACCOUNT_ID,
   type DingtalkConfig,
+  mergeDingtalkAccountConfig,
+  type PluginConfig,
   resolveInboundMediaDir,
   resolveInboundMediaKeepDays,
   resolveInboundMediaTempDir,
@@ -847,7 +850,7 @@ export async function handleDingtalkMessage(params: {
   const {
     cfg,
     raw,
-    accountId = "default",
+    accountId = DEFAULT_ACCOUNT_ID,
     enableAICard = false,
   } = params;
   
@@ -871,8 +874,11 @@ export async function handleDingtalkMessage(params: {
   );
   
   // 获取钉钉配置
-  const dingtalkCfg = (cfg as Record<string, unknown>)?.channels as Record<string, unknown> | undefined;
-  const channelCfg = dingtalkCfg?.dingtalk as DingtalkConfig | undefined;
+  const pluginCfg = (cfg as PluginConfig | undefined) ?? {};
+  const hasChannelConfig = Boolean(pluginCfg.channels?.dingtalk);
+  const channelCfg = hasChannelConfig
+    ? (mergeDingtalkAccountConfig(pluginCfg, accountId) as DingtalkConfig)
+    : undefined;
   const inboundMediaDir = resolveInboundMediaDir(channelCfg);
   const inboundMediaKeepDays = resolveInboundMediaKeepDays(channelCfg);
   const inboundMediaTempDir = resolveInboundMediaTempDir();
@@ -971,6 +977,7 @@ export async function handleDingtalkMessage(params: {
     const route = resolveAgentRoute({
       cfg,
       channel: "dingtalk",
+      accountId,
       peer: {
         kind: isGroup ? "group" : "dm",
         id: isGroup ? ctx.conversationId : ctx.senderId,
@@ -1094,7 +1101,11 @@ export async function handleDingtalkMessage(params: {
     }
     
     // 构建入站上下�?
-    const inboundCtx = buildInboundContext(ctx, (route as Record<string, unknown>)?.sessionKey as string, (route as Record<string, unknown>)?.accountId as string);
+    const inboundCtx = buildInboundContext(
+      ctx,
+      (route as Record<string, unknown>)?.sessionKey as string,
+      ((route as Record<string, unknown>)?.accountId as string | undefined) ?? accountId
+    );
     if (audioRecognition) {
       inboundCtx.Transcript = audioRecognition;
     }

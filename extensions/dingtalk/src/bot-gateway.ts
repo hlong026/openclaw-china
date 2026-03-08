@@ -4,21 +4,23 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { registerDingtalkBotHandler } from "./bot-stream-handler.js";
 import { createDingtalkClientFromConfig } from "./client.js";
-import type { DingtalkConfig } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  mergeDingtalkAccountConfig,
+  type DingtalkConfig,
+  type PluginConfig,
+} from "./config.js";
 import { createLogger, type Logger } from "./logger.js";
 
 export interface MonitorDingtalkOpts {
-  config?: {
-    channels?: {
-      dingtalk?: DingtalkConfig;
-    };
-  };
+  config?: PluginConfig;
   runtime?: {
     log?: (msg: string) => void;
     error?: (msg: string) => void;
   };
   abortSignal?: AbortSignal;
   accountId?: string;
+  setStatus?: (status: Record<string, unknown>) => void;
 }
 
 type DingtalkGatewayState =
@@ -59,10 +61,26 @@ const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 60_000;
 const RECONNECT_JITTER_RATIO = 0.2;
 
-let currentClient: DWClient | null = null;
-let currentAccountId: string | null = null;
-let currentPromise: Promise<void> | null = null;
-let currentStop: (() => void) | null = null;
+interface ActiveConnection {
+  client: DWClient | null;
+  promise: Promise<void> | null;
+  stop: (() => void) | null;
+}
+
+const activeConnections = new Map<string, ActiveConnection>();
+
+function getOrCreateConnection(accountId: string): ActiveConnection {
+  let conn = activeConnections.get(accountId);
+  if (!conn) {
+    conn = {
+      client: null,
+      promise: null,
+      stop: null,
+    };
+    activeConnections.set(accountId, conn);
+  }
+  return conn;
+}
 
 function toRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -225,11 +243,7 @@ export function resolveReconnectDelayMs(attempt: number, randomValue = Math.rand
 
 async function runGatewaySession(params: {
   client: DWClient;
-  config?: {
-    channels?: {
-      dingtalk?: DingtalkConfig;
-    };
-  };
+  config?: PluginConfig;
   accountId: string;
   logger: Logger;
   signal: AbortSignal;
@@ -350,17 +364,15 @@ async function runGatewaySession(params: {
 }
 
 async function runGatewayLoop(params: {
-  config?: {
-    channels?: {
-      dingtalk?: DingtalkConfig;
-    };
-  };
+  config?: PluginConfig;
   dingtalkCfg: DingtalkConfig;
   accountId: string;
   logger: Logger;
   signal: AbortSignal;
+  conn: ActiveConnection;
+  setStatus?: (status: Record<string, unknown>) => void;
 }): Promise<void> {
-  const { config, dingtalkCfg, accountId, logger, signal } = params;
+  const { config, dingtalkCfg, accountId, logger, signal, conn, setStatus } = params;
   const metrics = createGatewayMetrics();
   const stateRef: TransitionRef = { state: "idle" };
 
@@ -380,7 +392,7 @@ async function runGatewayLoop(params: {
       throw err;
     }
 
-    currentClient = client;
+    conn.client = client;
     try {
       sessionResult = await runGatewaySession({
         client,
@@ -396,8 +408,8 @@ async function runGatewayLoop(params: {
       sessionResult = { kind: "reconnect", reason: "session_error" };
     } finally {
       safeDisconnect(client, logger);
-      if (currentClient === client) {
-        currentClient = null;
+      if (conn.client === client) {
+        conn.client = null;
       }
     }
 
@@ -421,6 +433,13 @@ async function runGatewayLoop(params: {
     logger.warn(
       `[gateway] reconnect scheduled in ${delayMs}ms (attempt=${reconnectAttempt}, reason=${sessionResult.reason})`,
     );
+    setStatus?.({
+      accountId,
+      state: "reconnecting",
+      reconnectAttempt,
+      reconnectReason: sessionResult.reason,
+      lastReconnectAt: metrics.lastReconnectAt,
+    });
     const keepRunning = await sleepWithAbort(delayMs, signal);
     if (!keepRunning) {
       break;
@@ -428,30 +447,36 @@ async function runGatewayLoop(params: {
   }
 
   transitionState({ ref: stateRef, next: "stopped", logger, reason: "abort/stop" });
+  setStatus?.({
+    accountId,
+    state: "stopped",
+    reconnectCountTotal: metrics.reconnectCountTotal,
+    ackFailCount: metrics.ackFailCount,
+    dedupeHitCount: metrics.dedupeHitCount,
+    parseErrorCount: metrics.parseErrorCount,
+  });
   logger.info(
     `[gateway] stopped; reconnects=${metrics.reconnectCountTotal} ackFail=${metrics.ackFailCount} dedupeHit=${metrics.dedupeHitCount} parseErr=${metrics.parseErrorCount}`,
   );
 }
 
 export async function monitorDingtalkProvider(opts: MonitorDingtalkOpts = {}): Promise<void> {
-  const { config, runtime, abortSignal, accountId = "default" } = opts;
+  const { config, runtime, abortSignal, accountId = DEFAULT_ACCOUNT_ID, setStatus } = opts;
   const logger: Logger = createLogger("dingtalk", {
     log: runtime?.log,
     error: runtime?.error,
   });
 
-  if (currentPromise) {
-    if (currentAccountId && currentAccountId !== accountId) {
-      throw new Error(`DingTalk already running for account ${currentAccountId}`);
-    }
+  const conn = getOrCreateConnection(accountId);
+  if (conn.promise) {
     logger.debug(`existing gateway for account ${accountId} is active, reusing promise`);
-    return currentPromise;
+    return conn.promise;
   }
 
-  const dingtalkCfg = config?.channels?.dingtalk;
-  if (!dingtalkCfg) {
-    throw new Error("DingTalk configuration not found");
+  if (!config?.channels?.dingtalk) {
+    throw new Error(`DingTalk configuration not found for account ${accountId}`);
   }
+  const dingtalkCfg = mergeDingtalkAccountConfig(config, accountId);
 
   await ensureGatewayHttpEnabled({ dingtalkCfg, logger });
 
@@ -468,8 +493,7 @@ export async function monitorDingtalkProvider(opts: MonitorDingtalkOpts = {}): P
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
 
-  currentAccountId = accountId;
-  currentStop = () => {
+  conn.stop = () => {
     logger.info("stop requested, stopping Stream gateway");
     stopController.abort();
   };
@@ -480,39 +504,63 @@ export async function monitorDingtalkProvider(opts: MonitorDingtalkOpts = {}): P
     accountId,
     logger,
     signal: stopSignal,
+    conn,
+    setStatus,
   }).finally(() => {
     abortSignal?.removeEventListener("abort", onAbort);
-    if (currentPromise === runPromise) {
-      currentClient = null;
-      currentAccountId = null;
-      currentStop = null;
-      currentPromise = null;
+    if (conn.promise === runPromise) {
+      conn.client = null;
+      conn.stop = null;
+      conn.promise = null;
+      activeConnections.delete(accountId);
     }
   });
 
-  currentPromise = runPromise;
+  conn.promise = runPromise;
   return runPromise;
 }
 
-export function stopDingtalkMonitor(): void {
-  if (currentStop) {
-    currentStop();
+export function stopDingtalkMonitorForAccount(accountId: string = DEFAULT_ACCOUNT_ID): void {
+  const conn = activeConnections.get(accountId);
+  if (!conn) return;
+
+  if (conn.stop) {
+    conn.stop();
     return;
   }
-  if (currentClient) {
+
+  if (conn.client) {
     const logger = createLogger("dingtalk");
-    safeDisconnect(currentClient, logger);
-    currentClient = null;
-    currentAccountId = null;
-    currentPromise = null;
-    currentStop = null;
+    safeDisconnect(conn.client, logger);
   }
+  activeConnections.delete(accountId);
+}
+
+export function stopAllDingtalkMonitors(): void {
+  for (const accountId of activeConnections.keys()) {
+    stopDingtalkMonitorForAccount(accountId);
+  }
+}
+
+export function stopDingtalkMonitor(): void {
+  stopDingtalkMonitorForAccount(DEFAULT_ACCOUNT_ID);
+}
+
+export function isMonitorActiveForAccount(accountId: string = DEFAULT_ACCOUNT_ID): boolean {
+  const conn = activeConnections.get(accountId);
+  return Boolean(conn?.promise);
 }
 
 export function isMonitorActive(): boolean {
-  return currentPromise !== null;
+  return isMonitorActiveForAccount(DEFAULT_ACCOUNT_ID);
+}
+
+export function getActiveAccountIds(): string[] {
+  return Array.from(activeConnections.keys());
 }
 
 export function getCurrentAccountId(): string | null {
-  return currentAccountId;
+  const activeIds = getActiveAccountIds();
+  if (activeIds.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
+  return activeIds[0] ?? null;
 }

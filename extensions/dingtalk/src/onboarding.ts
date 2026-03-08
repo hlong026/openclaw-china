@@ -9,7 +9,14 @@
  */
 
 import { DEFAULT_ACCOUNT_ID } from "./channel.js";
-import { isConfigured, resolveDingtalkCredentials, type DingtalkConfig } from "./config.js";
+import {
+  isConfigured,
+  listDingtalkAccountIds,
+  mergeDingtalkAccountConfig,
+  resolveDefaultDingtalkAccountId,
+  resolveDingtalkCredentials,
+  type DingtalkConfig,
+} from "./config.js";
 
 /**
  * 配置接口类型
@@ -209,14 +216,22 @@ export const dingtalkOnboardingAdapter = {
    * 获取渠道配置状态
    */
   getStatus: async (params: { cfg: PluginConfig }) => {
-    const dingtalkCfg = params.cfg.channels?.dingtalk as DingtalkConfig | undefined;
-    const configured = isConfigured(dingtalkCfg);
+    const accountIds = listDingtalkAccountIds(params.cfg);
+    const configuredAccountId = accountIds.find((accountId) =>
+      isConfigured(mergeDingtalkAccountConfig(params.cfg, accountId))
+    );
+    const configured = Boolean(configuredAccountId);
+    const defaultAccountId = resolveDefaultDingtalkAccountId(params.cfg);
 
     const statusLines: string[] = [];
     if (!configured) {
       statusLines.push("钉钉: 需要配置应用凭证");
     } else {
-      statusLines.push("钉钉: 已配置");
+      statusLines.push(
+        configuredAccountId && configuredAccountId !== DEFAULT_ACCOUNT_ID
+          ? `钉钉: 已配置 (${configuredAccountId})`
+          : `钉钉: 已配置${defaultAccountId !== DEFAULT_ACCOUNT_ID ? ` (default=${defaultAccountId})` : ""}`
+      );
     }
 
     return {
@@ -232,7 +247,9 @@ export const dingtalkOnboardingAdapter = {
    * 交互式配置向导
    */
   configure: async (params: { cfg: PluginConfig; prompter: WizardPrompter }) => {
-    const dingtalkCfg = params.cfg.channels?.dingtalk as DingtalkConfig | undefined;
+    const defaultAccountId = resolveDefaultDingtalkAccountId(params.cfg);
+    const dingtalkCfg =
+      mergeDingtalkAccountConfig(params.cfg, defaultAccountId) as DingtalkConfig | undefined;
     const resolved = resolveDingtalkCredentials(dingtalkCfg);
     const hasConfigCreds = Boolean(
       dingtalkCfg?.clientId?.trim() && dingtalkCfg?.clientSecret?.trim()

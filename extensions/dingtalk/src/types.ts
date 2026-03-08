@@ -1,8 +1,8 @@
 // 钉钉类型定义
 
-import type { DingtalkConfig } from "./config.js";
+import type { DingtalkAccountConfig, DingtalkConfig } from "./config.js";
 
-export type { DingtalkConfig };
+export type { DingtalkConfig, DingtalkAccountConfig };
 
 /**
  * 富文本消息元素

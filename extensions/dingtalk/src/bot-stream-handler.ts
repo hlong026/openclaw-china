@@ -1,14 +1,11 @@
 import { TOPIC_ROBOT, type DWClient, type DWClientDownStream } from "dingtalk-stream";
 import { handleDingtalkMessage } from "./bot-handler.js";
-import type { DingtalkConfig } from "./config.js";
+import {
+  mergeDingtalkAccountConfig,
+  type PluginConfig,
+} from "./config.js";
 import type { Logger } from "./logger.js";
 import type { DingtalkRawMessage } from "./types.js";
-
-type PluginConfig = {
-  channels?: {
-    dingtalk?: DingtalkConfig;
-  };
-};
 
 export interface RegisterDingtalkBotHandlerParams {
   client: DWClient;
@@ -41,15 +38,15 @@ function trimMessageDedupeCache(now: number): void {
   }
 }
 
-function isDuplicateMessage(streamMessageId: string, now: number): boolean {
-  const previous = processedMessages.get(streamMessageId);
+function isDuplicateMessage(messageKey: string, now: number): boolean {
+  const previous = processedMessages.get(messageKey);
   if (typeof previous === "number" && now - previous < MESSAGE_DEDUP_TTL_MS) {
     return true;
   }
   if (typeof previous === "number") {
-    processedMessages.delete(streamMessageId);
+    processedMessages.delete(messageKey);
   }
-  processedMessages.set(streamMessageId, now);
+  processedMessages.set(messageKey, now);
   trimMessageDedupeCache(now);
   return false;
 }
@@ -118,6 +115,7 @@ function processDingtalkInbound(params: {
     onParseError,
   } = params;
   const streamMessageId = payload?.headers?.messageId;
+  const dedupeKey = streamMessageId ? `${accountId}:${streamMessageId}` : undefined;
 
   if (streamMessageId) {
     try {
@@ -128,7 +126,7 @@ function processDingtalkInbound(params: {
     }
   }
 
-  if (streamMessageId && isDuplicateMessage(streamMessageId, Date.now())) {
+  if (dedupeKey && isDuplicateMessage(dedupeKey, Date.now())) {
     onDedupeHit?.(streamMessageId);
     logger.debug(`duplicate message ignored: ${streamMessageId}`);
     return;
@@ -161,7 +159,9 @@ function processDingtalkInbound(params: {
 }
 
 export function registerDingtalkBotHandler(params: RegisterDingtalkBotHandlerParams): void {
-  const dingtalkCfg = params.config?.channels?.dingtalk;
+  const dingtalkCfg = params.config
+    ? mergeDingtalkAccountConfig(params.config, params.accountId)
+    : undefined;
   params.client.registerCallbackListener(TOPIC_ROBOT, (payload) => {
     processDingtalkInbound({
       payload,

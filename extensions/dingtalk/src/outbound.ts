@@ -15,17 +15,11 @@
 import { sendMessageDingtalk } from "./send.js";
 import { sendMediaDingtalk } from "./media.js";
 import { getDingtalkRuntime } from "./runtime.js";
-import type { DingtalkConfig } from "./types.js";
-
-/**
- * 出站适配器配置类型
- * 简化版本，仅包含必要字段
- */
-export interface OutboundConfig {
-  channels?: {
-    dingtalk?: DingtalkConfig;
-  };
-}
+import {
+  mergeDingtalkAccountConfig,
+  resolveDingtalkAccountId,
+  type PluginConfig as OutboundConfig,
+} from "./config.js";
 
 /**
  * 发送结果类型
@@ -87,13 +81,17 @@ export const dingtalkOutbound = {
     cfg: OutboundConfig;
     to: string;
     text: string;
+    accountId?: string;
   }): Promise<SendResult> => {
-    const { cfg, to, text } = params;
+    const { cfg, to, text, accountId } = params;
 
-    const dingtalkCfg = cfg.channels?.dingtalk;
-    if (!dingtalkCfg) {
+    if (!cfg.channels?.dingtalk) {
       throw new Error("DingTalk channel not configured");
     }
+    const dingtalkCfg = mergeDingtalkAccountConfig(
+      cfg,
+      resolveDingtalkAccountId(cfg, accountId)
+    );
 
     const { targetId, chatType } = parseTarget(to);
 
@@ -120,13 +118,17 @@ export const dingtalkOutbound = {
     to: string;
     text?: string;
     mediaUrl?: string;
+    accountId?: string;
   }): Promise<SendResult> => {
-    const { cfg, to, text, mediaUrl } = params;
+    const { cfg, to, text, mediaUrl, accountId } = params;
 
-    const dingtalkCfg = cfg.channels?.dingtalk;
-    if (!dingtalkCfg) {
+    if (!cfg.channels?.dingtalk) {
       throw new Error("DingTalk channel not configured");
     }
+    const dingtalkCfg = mergeDingtalkAccountConfig(
+      cfg,
+      resolveDingtalkAccountId(cfg, accountId)
+    );
 
     const { targetId, chatType } = parseTarget(to);
 

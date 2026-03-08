@@ -5,8 +5,12 @@
 
 export {
   monitorDingtalkProvider,
+  stopDingtalkMonitorForAccount,
+  stopAllDingtalkMonitors,
   stopDingtalkMonitor,
+  isMonitorActiveForAccount,
   isMonitorActive,
+  getActiveAccountIds,
   getCurrentAccountId,
   type MonitorDingtalkOpts,
 } from "./bot-gateway.js";

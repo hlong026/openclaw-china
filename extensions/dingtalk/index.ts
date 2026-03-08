@@ -38,7 +38,12 @@ export { sendMessageDingtalk } from "./src/send.js";
 export { setDingtalkRuntime, getDingtalkRuntime } from "./src/runtime.js";
 
 // 导出类型
-export type { DingtalkConfig, ResolvedDingtalkAccount, DingtalkSendResult } from "./src/types.js";
+export type {
+  DingtalkConfig,
+  DingtalkAccountConfig,
+  ResolvedDingtalkAccount,
+  DingtalkSendResult,
+} from "./src/types.js";
 
 /**
  * 钉钉插件定义
@@ -61,6 +66,8 @@ const plugin = {
     additionalProperties: false,
     properties: {
       enabled: { type: "boolean" },
+      name: { type: "string" },
+      defaultAccount: { type: "string" },
       clientId: { type: "string" },
       clientSecret: { type: "string" },
       dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist"] },
@@ -71,6 +78,53 @@ const plugin = {
       historyLimit: { type: "integer", minimum: 0 },
       textChunkLimit: { type: "integer", minimum: 1 },
       longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
+      connectionMode: { type: "string", enum: ["stream", "webhook"] },
+      enableAICard: { type: "boolean" },
+      gatewayToken: { type: "string" },
+      gatewayPassword: { type: "string" },
+      maxFileSizeMB: { type: "number", minimum: 1 },
+      inboundMedia: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          dir: { type: "string" },
+          keepDays: { type: "number", minimum: 0 },
+        },
+      },
+      accounts: {
+        type: "object",
+        additionalProperties: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+            enabled: { type: "boolean" },
+            clientId: { type: "string" },
+            clientSecret: { type: "string" },
+            dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist"] },
+            groupPolicy: { type: "string", enum: ["open", "allowlist", "disabled"] },
+            requireMention: { type: "boolean" },
+            allowFrom: { type: "array", items: { type: "string" } },
+            groupAllowFrom: { type: "array", items: { type: "string" } },
+            historyLimit: { type: "integer", minimum: 0 },
+            textChunkLimit: { type: "integer", minimum: 1 },
+            longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
+            connectionMode: { type: "string", enum: ["stream", "webhook"] },
+            enableAICard: { type: "boolean" },
+            gatewayToken: { type: "string" },
+            gatewayPassword: { type: "string" },
+            maxFileSizeMB: { type: "number", minimum: 1 },
+            inboundMedia: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                dir: { type: "string" },
+                keepDays: { type: "number", minimum: 0 },
+              },
+            },
+          },
+        },
+      },
     },
   },
 
